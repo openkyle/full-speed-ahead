@@ -740,6 +740,7 @@ function updateSmoothRotation(tokenDocument, motion, moveProgress, controller) {
 
     const rounded = Math.round(target);
     if (normalizeDegrees(tokenDocument.rotation ?? 0) === normalizeDegrees(rounded)) return;
+    if (!canUpdateTokenDocument(tokenDocument)) return;
 
     tokenDocument.update(
         { rotation: rounded },
@@ -749,13 +750,19 @@ function updateSmoothRotation(tokenDocument, motion, moveProgress, controller) {
 
 function finishVehicleMotionEffects(tokenDocument, motion, controller, tick) {
     canvas.app.ticker.remove(tick);
-    tokenDocument.update(
-        { rotation: motion.targetRotation },
-        { animate: false, [INTERNAL_MOVE]: true, fullSpeedAheadRotationOnly: true }
-    ).catch(error => console.warn(`${LOG_PREFIX} Could not finish vehicle rotation.`, error));
+    if (canUpdateTokenDocument(tokenDocument)) {
+        tokenDocument.update(
+            { rotation: motion.targetRotation },
+            { animate: false, [INTERNAL_MOVE]: true, fullSpeedAheadRotationOnly: true }
+        ).catch(error => console.warn(`${LOG_PREFIX} Could not finish vehicle rotation.`, error));
+    }
 
     fadeAndDestroyThruster(controller);
     activeMotionEffects.delete(tokenDocument.id);
+}
+
+function canUpdateTokenDocument(tokenDocument) {
+    return game.user.isGM || tokenDocument.canUserModify?.(game.user, "update") === true;
 }
 
 function stopVehicleMotionEffects(tokenId) {
