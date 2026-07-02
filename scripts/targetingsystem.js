@@ -62,15 +62,15 @@ export class TargetingSystem {
         // Check if the actor is a vehicle before creating range templates
         if (actor.type === 'vehicle') {
             // Find the weapon array items on the vehicle actor
-            let weaponArrayItems = actor.items.filter(i => i.type === "weapon" && i.system.range?.long);
+            let weaponArrayItems = actor.items.filter(i => i.type === "weapon" && getRangeNumber(i.system.range?.long) > 0);
             if (weaponArrayItems.length > 0) {
                 // Extract the highest long range from the weapon array items
-                let highestLongRangeItem = weaponArrayItems.reduce((max, item) => item.system.range.long > max.system.range.long ? item : max);
-                let longRange = highestLongRangeItem.system.range.long - 50; // Subtract 50 from long range for drawing purposes
+                let highestLongRangeItem = weaponArrayItems.reduce((max, item) => getRangeNumber(item.system.range.long) > getRangeNumber(max.system.range.long) ? item : max);
+                let longRange = getRangeNumber(highestLongRangeItem.system.range.long) - 50; // Subtract 50 from long range for drawing purposes
                 let unit = highestLongRangeItem.system.range.units;
 
                 // Extract the short range from the weapon array item
-                let shortRange = highestLongRangeItem.system.range.value - 50; // Subtract 50 from short range for drawing purposes
+                let shortRange = getRangeNumber(highestLongRangeItem.system.range.value) - 50; // Subtract 50 from short range for drawing purposes
 
                 if (longRange > 0 && shortRange > 0 && (unit === "m" || unit === "ft")) {
                     // Use the selected token to create range templates
@@ -121,13 +121,10 @@ export class TargetingSystem {
             let text = "";
             let textColor = "#FFFFFF";
 
-            let validWeapons = weapons.filter(weapon => {
-                let weaponRange = weapon.system.range?.long || weapon.system.range?.value || 0;
-                return distance <= weaponRange;
-            });
+            let validWeapons = weapons.filter(weapon => distance <= getAttackRanges(weapon).long);
 
             let validSpells = spells.filter(spell => {
-                let spellRange = parseInt(spell.system.range?.value) || 0;
+                let spellRange = getRangeNumber(spell.system.range?.value);
                 return distance <= spellRange;
             });
 
@@ -135,7 +132,7 @@ export class TargetingSystem {
             let validAttacks = [...validWeapons, ...validSpells];
 
             if (validAttacks.length > 0) {
-                if (distance <= Math.min(...validAttacks.map(attack => attack.system.range?.value || attack.system.range?.long || 0))) {
+                if (distance <= Math.min(...validAttacks.map(attack => getAttackRanges(attack).short))) {
                     text = "[In Range]";
                     textColor = "#00FF00"; // Green for within short range
                 } else {
@@ -223,8 +220,7 @@ export class TargetingSystem {
 
                 // Retrieve and print attacks for the selected token that are in range
                 const attackNames = validAttacks.map(attack => {
-                    let shortRange = attack.system.range?.value || 0;
-                    let longRange = attack.system.range?.long || 0;
+                    let { short: shortRange, long: longRange } = getAttackRanges(attack);
                     if (distance > shortRange && distance <= longRange) {
                         return { name: attack.name, longRange: true };
                     } else {
@@ -294,6 +290,19 @@ export class TargetingSystem {
             hiddenWindows.forEach(win => win.maximize());
         }, 10000);
     }
+}
+
+function getRangeNumber(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    const normalized = String(value ?? "").replace(/,/g, "").trim();
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getAttackRanges(attack) {
+    const short = getRangeNumber(attack.system.range?.value);
+    const long = getRangeNumber(attack.system.range?.long) || short;
+    return { short, long };
 }
 
 // Register the module function
