@@ -225,7 +225,13 @@ export class TargetingSystem {
             stopPropagation: () => {}
         };
 
-        const rollOptions = { event: rollEvent, disadvantage, advantage: false };
+        const rollOptions = {
+            event: rollEvent,
+            disadvantage,
+            advantage: false,
+            rollMode: "publicroll",
+            messageData: { whisper: [], blind: false }
+        };
         if (typeof item.use === "function") await item.use(rollOptions);
         else if (typeof item.roll === "function") await item.roll(rollOptions);
         else ui.notifications.warn(`${item.name} cannot be rolled directly by Full Speed Ahead.`);
