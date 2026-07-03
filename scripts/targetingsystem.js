@@ -155,6 +155,23 @@ export class TargetingSystem {
             canvas.stage.addChild(transparentMat);
             floatingElements.push(transparentMat);
 
+            // Create a floating text for the target name.
+            let targetNameText = new PIXI.Text(token.name, {
+                fontFamily: "Arial",
+                fontSize: 22,
+                fill: "#FFFFFF",
+                stroke: "#000000",
+                strokeThickness: 4,
+                dropShadow: true,
+                dropShadowColor: "#000000",
+                dropShadowBlur: 4,
+                dropShadowAngle: Math.PI / 6,
+                dropShadowDistance: 4
+            });
+            targetNameText.position.set(token.center.x + 60, token.center.y - 42);
+            canvas.stage.addChild(targetNameText);
+            floatingElements.push(targetNameText);
+
             // Create a floating text for range label
             let floatingText = new PIXI.Text(text, {
                 fontFamily: "Arial",
@@ -168,7 +185,7 @@ export class TargetingSystem {
                 dropShadowAngle: Math.PI / 6,
                 dropShadowDistance: 4
             });
-            floatingText.position.set(token.center.x + 60, token.center.y - 20); // Position further lower and to the left of the token
+            floatingText.position.set(token.center.x + 60, token.center.y - 16); // Position below the target name.
             canvas.stage.addChild(floatingText);
             floatingElements.push(floatingText);
 
@@ -186,7 +203,7 @@ export class TargetingSystem {
                 dropShadowAngle: Math.PI / 6,
                 dropShadowDistance: 4
             });
-            floatingDistanceText.position.set(token.center.x + 62, token.center.y + 10); // Position below the main text with padding adjustment
+            floatingDistanceText.position.set(token.center.x + 62, token.center.y + 14); // Position below the main text with padding adjustment
             canvas.stage.addChild(floatingDistanceText);
             floatingElements.push(floatingDistanceText);
 
