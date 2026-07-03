@@ -280,7 +280,7 @@ function getActingToken() {
     if (controlled.length === 1) return controlled[0];
 
     if (controlled.length > 1) {
-        ui.notifications.warn("Please select only the character you are acting as.");
+        ui.notifications.warn("Please select the attacking character first.");
         return null;
     }
 
@@ -289,12 +289,12 @@ function getActingToken() {
         const characterTokens = canvas.tokens.placeables.filter(token => token.actor?.id === character.id && !token.document.hidden);
         if (characterTokens.length === 1) return characterTokens[0];
         if (characterTokens.length > 1) {
-            ui.notifications.warn("Please select the specific token you are acting as.");
+            ui.notifications.warn("Please select the attacking character first.");
             return null;
         }
     }
 
-    ui.notifications.warn("Please select the token you are acting as first.");
+    ui.notifications.warn("Please select the attacking character first.");
     return null;
 }
 
