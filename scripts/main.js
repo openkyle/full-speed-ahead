@@ -532,6 +532,21 @@ function registerTargetingSettings() {
         type: Boolean,
         default: true
     });
+
+    registerSetting("autoRemoveTargetingTemplate", {
+        name: "Automatically Remove Targeting Template",
+        hint: "Automatically clear targeting labels and range templates after the configured number of seconds.",
+        type: Boolean,
+        default: true
+    });
+
+    registerSetting("targetingTemplateRemovalSeconds", {
+        name: "Targeting Template Removal Seconds",
+        hint: "How many seconds targeting labels and range templates remain visible when automatic removal is enabled.",
+        type: Number,
+        default: 10,
+        range: { min: 1, max: 120, step: 1 }
+    });
 }
 
 function addTargetingSystemButton() {

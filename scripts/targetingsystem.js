@@ -55,6 +55,7 @@ export class TargetingSystem {
 
         // Store references to the created elements for later removal
         let floatingElements = [];
+        let cleanedUp = false;
 
         // Draw long and short range templates once before iterating over tokens
         let longRangeTemplate, shortRangeTemplate;
@@ -243,23 +244,7 @@ export class TargetingSystem {
                     ChatMessage.create({ content: `${selectedToken.name} has no available attacks in range for ${token.name}.`, whisper: game.user.isGM ? [game.user.id] : [] });
                 }
 
-                // Clear all the distance labels after selecting the target
-                floatingElements.forEach(element => {
-                    if (canvas.stage.children.includes(element)) {
-                        canvas.stage.removeChild(element);
-                    }
-                });
-                floatingElements = []; // Clear the reference array
-
-                // Revert cursor back to default after selecting the target
-                document.body.style.cursor = 'default';
-
-                // Remove templates if they exist
-                if (longRangeTemplate && longRangeTemplate[0]) canvas.scene.deleteEmbeddedDocuments("MeasuredTemplate", [longRangeTemplate[0].id]);
-                if (shortRangeTemplate && shortRangeTemplate[0]) canvas.scene.deleteEmbeddedDocuments("MeasuredTemplate", [shortRangeTemplate[0].id]);
-
-                // Restore all previously hidden windows
-                hiddenWindows.forEach(win => win.maximize());
+                cleanupTargetingDisplay();
 
                 // Re-select the original player token
                 selectedToken.control({ releaseOthers: true });
@@ -269,9 +254,15 @@ export class TargetingSystem {
             clickIconText.on('pointerdown', selectTarget); // Make clickIconText also trigger targeting
         }
 
-        // Set a 6-second timeout to clear all labels, templates, and revert states to basic
-        setTimeout(() => {
-            // Clear all the distance labels
+        if (game.settings.get('full-speed-ahead', 'autoRemoveTargetingTemplate')) {
+            const removalSeconds = Math.max(1, getRangeNumber(game.settings.get('full-speed-ahead', 'targetingTemplateRemovalSeconds')) || 10);
+            setTimeout(() => cleanupTargetingDisplay(), removalSeconds * 1000);
+        }
+
+        function cleanupTargetingDisplay() {
+            if (cleanedUp) return;
+            cleanedUp = true;
+
             floatingElements.forEach(element => {
                 if (canvas.stage.children.includes(element)) {
                     canvas.stage.removeChild(element);
@@ -288,7 +279,7 @@ export class TargetingSystem {
 
             // Restore all previously hidden windows
             hiddenWindows.forEach(win => win.maximize());
-        }, 10000);
+        }
     }
 }
 
