@@ -180,6 +180,27 @@ export class TargetingSystem {
         await TargetingSystem.targetTokenAndShowAttacks(sourceToken, hoveredToken, validAttacks, distance);
     }
 
+    static async handleDoubleRightClickTarget(targetToken, event) {
+        if (!game.settings.get(MODULE_ID, "enableTargetingSystem")) return false;
+        if (!game.settings.get(MODULE_ID, "replaceDoubleRightClickTargeting")) return false;
+        if (!canvas?.ready || !targetToken?.actor || targetToken.document.hidden) return false;
+
+        stopFoundryEvent(event);
+
+        const sourceToken = getActingToken();
+        if (!sourceToken) return true;
+
+        if (sourceToken.id === targetToken.id) {
+            ui.notifications.warn("Please double right-click a target, not the attacking character.");
+            return true;
+        }
+
+        const { weapons, spells } = getActorAttacks(sourceToken.actor);
+        const { distance, validAttacks } = getTargetingData(sourceToken, targetToken, weapons, spells);
+        await TargetingSystem.targetTokenAndShowAttacks(sourceToken, targetToken, validAttacks, distance);
+        return true;
+    }
+
     static async targetTokenAndShowAttacks(sourceToken, targetToken, validAttacks, distance) {
         setOnlyTarget(targetToken);
         ui.notifications.warn(`[Targeting] ${targetToken.name} has been targeted.`);
@@ -397,6 +418,34 @@ function isTargetShortcutEvent(event) {
     return true;
 }
 
+function stopFoundryEvent(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    event?.stopImmediatePropagation?.();
+    event?.data?.originalEvent?.preventDefault?.();
+    event?.data?.originalEvent?.stopPropagation?.();
+    event?.data?.originalEvent?.stopImmediatePropagation?.();
+}
+
+function patchDoubleRightClickTargeting() {
+    if (!globalThis.Token?.prototype?._onClickRight2) return;
+    if (Token.prototype._fullSpeedAheadRightClickPatched) return;
+
+    const original = Token.prototype._onClickRight2;
+    Token.prototype._onClickRight2 = function(event) {
+        if (
+            !game.settings.get(MODULE_ID, "enableTargetingSystem") ||
+            !game.settings.get(MODULE_ID, "replaceDoubleRightClickTargeting")
+        ) {
+            return original.call(this, event);
+        }
+
+        void TargetingSystem.handleDoubleRightClickTarget(this, event);
+        return false;
+    };
+    Token.prototype._fullSpeedAheadRightClickPatched = true;
+}
+
 function escapeHtml(value) {
     if (globalThis.foundry?.utils?.escapeHTML) return foundry.utils.escapeHTML(String(value ?? ""));
     return String(value ?? "").replace(/[&<>"']/g, character => ({
@@ -428,6 +477,7 @@ Hooks.on("ready", () => {
     };
 
     document.addEventListener("keydown", event => TargetingSystem.handleTargetShortcut(event), true);
+    patchDoubleRightClickTargeting();
 
     Hooks.on("renderChatMessage", (_message, html) => {
         html.find(".full-speed-ahead-roll-attack").on("click", event => TargetingSystem.rollAttackFromChat(event));

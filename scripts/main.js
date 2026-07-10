@@ -533,6 +533,13 @@ function registerTargetingSettings() {
         default: true
     });
 
+    registerSetting("replaceDoubleRightClickTargeting", {
+        name: "Replace Double Right-Click Targeting",
+        hint: "Use Full Speed Ahead targeting and private attack helpers when double right-clicking a token. Leave unchecked to keep Foundry's default targeting behavior.",
+        type: Boolean,
+        default: false
+    });
+
     registerSetting("autoRemoveTargetingTemplate", {
         name: "Automatically Remove Targeting Template",
         hint: "Automatically clear targeting labels and range templates after the configured number of seconds.",
