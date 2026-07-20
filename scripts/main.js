@@ -9,9 +9,12 @@ const SHIP_PROFILES_SETTING = "shipProfiles";
 const SCENE_THRUSTER_PROFILES_SETTING = "sceneThrusterProfiles";
 const DEFAULT_MOVEMENT_SOUND_PATH = "modules/full-speed-ahead/sounds/lockon.ogg";
 const DEFAULT_THRUSTER_COLOR = "#40c7ff";
+const VEHICLE_HOVER_LOOP_MS = 5000;
 const lastTokenPositions = new Map();
 const activeMotionEffects = new Map();
+const activeVehicleHovers = new Map();
 let activeThrusterPreview = null;
+let vehicleHoverTicker = null;
 
 class FullSpeedAheadEffectsConfig extends FormApplication {
     static get defaultOptions() {
@@ -328,6 +331,14 @@ Hooks.once("init", () => {
         range: { min: -180, max: 180, step: 15 }
     });
 
+    registerSetting("enableVehicleHoverEffect", {
+        name: "Vehicles have a hover effect",
+        hint: "Gently move vehicle token art in place using Full Speed Ahead's built-in hover motion.",
+        type: Boolean,
+        default: true,
+        onChange: refreshVehicleHoverEffects
+    });
+
     registerSetting("enableMovementSound", {
         name: "Enable Movement Sound",
         hint: "Play a sound effect whenever a vehicle token moves.",
@@ -434,6 +445,19 @@ Hooks.once("init", () => {
 
 Hooks.on("ready", () => {
     console.log(`${LOG_PREFIX} Ready.`);
+    refreshVehicleHoverEffects();
+});
+
+Hooks.on("canvasReady", () => {
+    refreshVehicleHoverEffects();
+});
+
+Hooks.on("drawToken", token => {
+    applyVehicleHoverIfNeeded(token);
+});
+
+Hooks.on("deleteToken", tokenDocument => {
+    stopVehicleHoverForTokenId(tokenDocument.id);
 });
 
 Hooks.on("preUpdateToken", (tokenDocument, changes, options, userId) => {
@@ -665,6 +689,146 @@ function applyVehicleSheetCosmetics(app, html) {
             label.text(label.text().replace("Features", "Ship Functions"));
         });
     }
+}
+
+function refreshVehicleHoverEffects() {
+    if (!canvas?.ready || !canvas.tokens) return;
+
+    if (!game.settings.get(MODULE_ID, "enableVehicleHoverEffect")) {
+        stopAllVehicleHovers();
+        return;
+    }
+
+    for (const token of canvas.tokens.placeables ?? []) {
+        applyVehicleHoverIfNeeded(token);
+    }
+    ensureVehicleHoverTicker();
+}
+
+function applyVehicleHoverIfNeeded(token) {
+    if (!canvas?.ready || !token?.document) return;
+    if (!game.settings.get(MODULE_ID, "enableVehicleHoverEffect")) {
+        stopVehicleHoverForTokenId(token.id);
+        return;
+    }
+    if (token.actor?.type !== "vehicle" || token.document.hidden) {
+        stopVehicleHoverForTokenId(token.id);
+        return;
+    }
+    if (activeVehicleHovers.has(token.id)) return;
+
+    const object = getVehicleHoverObject(token);
+    if (!object?.position) return;
+
+    activeVehicleHovers.set(token.id, {
+        token,
+        object,
+        baseX: object.position.x,
+        baseY: object.position.y,
+        offsetX: 0,
+        offsetY: 0,
+        phase: getStableHoverPhase(token.id)
+    });
+    ensureVehicleHoverTicker();
+}
+
+function ensureVehicleHoverTicker() {
+    if (vehicleHoverTicker || !canvas?.app?.ticker) return;
+
+    vehicleHoverTicker = () => updateVehicleHovers();
+    canvas.app.ticker.add(vehicleHoverTicker);
+}
+
+function updateVehicleHovers() {
+    if (!canvas?.ready || !game.settings.get(MODULE_ID, "enableVehicleHoverEffect")) {
+        stopAllVehicleHovers();
+        return;
+    }
+
+    for (const token of canvas.tokens?.placeables ?? []) {
+        if (token.actor?.type === "vehicle" && !token.document.hidden) applyVehicleHoverIfNeeded(token);
+    }
+
+    const now = performance.now();
+    for (const [tokenId, state] of activeVehicleHovers) {
+        const token = canvas.tokens.get(tokenId);
+        if (!token || token.actor?.type !== "vehicle" || token.document.hidden) {
+            stopVehicleHoverState(tokenId, state);
+            continue;
+        }
+
+        const object = getVehicleHoverObject(token);
+        if (!object?.position) {
+            stopVehicleHoverState(tokenId, state);
+            continue;
+        }
+
+        if (object !== state.object) {
+            restoreVehicleHoverState(state);
+            state.object = object;
+            state.baseX = object.position.x;
+            state.baseY = object.position.y;
+            state.offsetX = 0;
+            state.offsetY = 0;
+        } else {
+            state.baseX = object.position.x - state.offsetX;
+            state.baseY = object.position.y - state.offsetY;
+        }
+
+        const size = Math.max(token.w || 0, token.h || 0, canvas.grid?.size || 100);
+        const amplitudeX = Math.max(0.5, size * 0.003);
+        const amplitudeY = Math.max(0.75, size * 0.005);
+        const radians = ((now + state.phase) % VEHICLE_HOVER_LOOP_MS) / VEHICLE_HOVER_LOOP_MS * Math.PI * 2;
+        const offsetX = Math.sin(radians) * amplitudeX;
+        const offsetY = Math.cos(radians) * amplitudeY;
+
+        object.position.set(state.baseX + offsetX, state.baseY + offsetY);
+        state.offsetX = offsetX;
+        state.offsetY = offsetY;
+    }
+
+    if (!activeVehicleHovers.size) stopVehicleHoverTicker();
+}
+
+function stopVehicleHoverForTokenId(tokenId) {
+    const state = activeVehicleHovers.get(tokenId);
+    if (!state) return;
+    stopVehicleHoverState(tokenId, state);
+}
+
+function stopVehicleHoverState(tokenId, state) {
+    restoreVehicleHoverState(state);
+    activeVehicleHovers.delete(tokenId);
+    if (!activeVehicleHovers.size) stopVehicleHoverTicker();
+}
+
+function stopAllVehicleHovers() {
+    for (const [tokenId, state] of activeVehicleHovers) {
+        stopVehicleHoverState(tokenId, state);
+    }
+    stopVehicleHoverTicker();
+}
+
+function stopVehicleHoverTicker() {
+    if (!vehicleHoverTicker || !canvas?.app?.ticker) return;
+    canvas.app.ticker.remove(vehicleHoverTicker);
+    vehicleHoverTicker = null;
+}
+
+function restoreVehicleHoverState(state) {
+    if (!state?.object?.position || state.object.destroyed) return;
+    state.object.position.set(state.baseX, state.baseY);
+    state.offsetX = 0;
+    state.offsetY = 0;
+}
+
+function getVehicleHoverObject(token) {
+    return token.mesh ?? token.icon ?? token.children?.find(child => child.texture || child.isSprite) ?? null;
+}
+
+function getStableHoverPhase(tokenId) {
+    const seed = String(tokenId ?? "").split("").reduce((total, character) => total + character.charCodeAt(0), 0);
+    return seed % VEHICLE_HOVER_LOOP_MS;
 }
 
 function startVehicleMotionEffects(tokenDocument, options) {
