@@ -456,6 +456,11 @@ Hooks.on("drawToken", token => {
     applyVehicleHoverIfNeeded(token);
 });
 
+Hooks.on("controlToken", (token, controlled) => {
+    if (controlled) stopVehicleHoverForTokenId(token.id);
+    else applyVehicleHoverIfNeeded(token);
+});
+
 Hooks.on("deleteToken", tokenDocument => {
     stopVehicleHoverForTokenId(tokenDocument.id);
 });
@@ -711,20 +716,21 @@ function applyVehicleHoverIfNeeded(token) {
         stopVehicleHoverForTokenId(token.id);
         return;
     }
-    if (token.actor?.type !== "vehicle" || token.document.hidden) {
+    if (token.actor?.type !== "vehicle" || token.document.hidden || token.controlled) {
         stopVehicleHoverForTokenId(token.id);
         return;
     }
     if (activeVehicleHovers.has(token.id)) return;
 
     const object = getVehicleHoverObject(token);
-    if (!object?.position) return;
+    const position = getVehicleHoverPosition(object);
+    if (!position) return;
 
     activeVehicleHovers.set(token.id, {
         token,
         object,
-        baseX: object.position.x,
-        baseY: object.position.y,
+        baseX: position.x,
+        baseY: position.y,
         offsetX: 0,
         offsetY: 0,
         phase: getStableHoverPhase(token.id)
@@ -746,19 +752,20 @@ function updateVehicleHovers() {
     }
 
     for (const token of canvas.tokens?.placeables ?? []) {
-        if (token.actor?.type === "vehicle" && !token.document.hidden) applyVehicleHoverIfNeeded(token);
+        if (token.actor?.type === "vehicle" && !token.document.hidden && !token.controlled) applyVehicleHoverIfNeeded(token);
     }
 
     const now = performance.now();
     for (const [tokenId, state] of activeVehicleHovers) {
         const token = canvas.tokens.get(tokenId);
-        if (!token || token.actor?.type !== "vehicle" || token.document.hidden) {
+        if (!token || token.actor?.type !== "vehicle" || token.document.hidden || token.controlled) {
             stopVehicleHoverState(tokenId, state);
             continue;
         }
 
         const object = getVehicleHoverObject(token);
-        if (!object?.position) {
+        const position = getVehicleHoverPosition(object);
+        if (!position) {
             stopVehicleHoverState(tokenId, state);
             continue;
         }
@@ -766,13 +773,13 @@ function updateVehicleHovers() {
         if (object !== state.object) {
             restoreVehicleHoverState(state);
             state.object = object;
-            state.baseX = object.position.x;
-            state.baseY = object.position.y;
+            state.baseX = position.x;
+            state.baseY = position.y;
             state.offsetX = 0;
             state.offsetY = 0;
         } else {
-            state.baseX = object.position.x - state.offsetX;
-            state.baseY = object.position.y - state.offsetY;
+            state.baseX = position.x - state.offsetX;
+            state.baseY = position.y - state.offsetY;
         }
 
         const size = Math.max(token.w || 0, token.h || 0, canvas.grid?.size || 100);
@@ -782,7 +789,7 @@ function updateVehicleHovers() {
         const offsetX = Math.sin(radians) * amplitudeX;
         const offsetY = Math.cos(radians) * amplitudeY;
 
-        object.position.set(state.baseX + offsetX, state.baseY + offsetY);
+        position.set(state.baseX + offsetX, state.baseY + offsetY);
         state.offsetX = offsetX;
         state.offsetY = offsetY;
     }
@@ -816,14 +823,24 @@ function stopVehicleHoverTicker() {
 }
 
 function restoreVehicleHoverState(state) {
-    if (!state?.object?.position || state.object.destroyed) return;
-    state.object.position.set(state.baseX, state.baseY);
+    const position = getVehicleHoverPosition(state?.object);
+    if (!position) return;
+    position.set(state.baseX, state.baseY);
     state.offsetX = 0;
     state.offsetY = 0;
 }
 
 function getVehicleHoverObject(token) {
     return token.mesh ?? token.icon ?? token.children?.find(child => child.texture || child.isSprite) ?? null;
+}
+
+function getVehicleHoverPosition(object) {
+    if (!object || object.destroyed) return null;
+    try {
+        return object.position ?? null;
+    } catch (error) {
+        return null;
+    }
 }
 
 function getStableHoverPhase(tokenId) {
