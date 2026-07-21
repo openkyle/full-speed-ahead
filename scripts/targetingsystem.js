@@ -1,6 +1,7 @@
 // targetingsystem.js: Range overlays, the T-key targeting override, and private attack cards.
 
 const MODULE_ID = "full-speed-ahead";
+const DISABLED_TARGETING_CARD_ACTORS_SETTING = "disabledTargetingCardActors";
 
 export class TargetingSystem {
     static async highlightWeaponRange(sourceToken = null) {
@@ -125,7 +126,8 @@ export class TargetingSystem {
             canvas.stage.addChild(clickIconText);
             floatingElements.push(clickIconText);
 
-            const selectTarget = async () => {
+            const selectTarget = async event => {
+                stopFoundryEvent(event);
                 await TargetingSystem.targetTokenAndShowAttacks(selectedToken, token, validAttacks, distance);
                 cleanupTargetingDisplay();
                 selectedToken.control({ releaseOthers: true });
@@ -134,6 +136,20 @@ export class TargetingSystem {
             transparentMat.on("pointerdown", selectTarget);
             clickIconText.on("pointerdown", selectTarget);
         }
+
+        const cancelTargetingOnEscape = event => {
+            if (event.key !== "Escape") return;
+            stopFoundryEvent(event);
+            cleanupTargetingDisplay();
+        };
+
+        const cancelTargetingOnBoardClick = event => {
+            if (floatingElements.includes(event.target)) return;
+            cleanupTargetingDisplay();
+        };
+
+        document.addEventListener("keydown", cancelTargetingOnEscape, true);
+        canvas.stage?.on("pointerdown", cancelTargetingOnBoardClick);
 
         if (game.settings.get(MODULE_ID, "autoRemoveTargetingTemplate")) {
             const removalSeconds = Math.max(1, getRangeNumber(game.settings.get(MODULE_ID, "targetingTemplateRemovalSeconds")) || 10);
@@ -149,6 +165,8 @@ export class TargetingSystem {
             });
             floatingElements = [];
             document.body.style.cursor = "default";
+            document.removeEventListener("keydown", cancelTargetingOnEscape, true);
+            canvas.stage?.off("pointerdown", cancelTargetingOnBoardClick);
 
             if (longRangeTemplate?.[0]) canvas.scene.deleteEmbeddedDocuments("MeasuredTemplate", [longRangeTemplate[0].id]);
             if (shortRangeTemplate?.[0]) canvas.scene.deleteEmbeddedDocuments("MeasuredTemplate", [shortRangeTemplate[0].id]);
@@ -210,6 +228,8 @@ export class TargetingSystem {
     }
 
     static async createAttackCard(sourceToken, targetToken, validAttacks, distance) {
+        if (shouldHideAttackCardForSource(sourceToken)) return;
+
         const content = buildAttackCardContent(sourceToken, targetToken, validAttacks, distance);
         await ChatMessage.create({
             user: game.user.id,
@@ -369,6 +389,16 @@ function setOnlyTarget(targetToken) {
         if (token.id !== targetToken.id) token.setTarget(false, { user: game.user });
     });
     targetToken.setTarget(true, { user: game.user });
+}
+
+function shouldHideAttackCardForSource(sourceToken) {
+    if (game.user.isGM) return false;
+
+    const actorId = sourceToken?.actor?.id;
+    if (!actorId) return false;
+
+    const disabledActors = game.settings.get(MODULE_ID, DISABLED_TARGETING_CARD_ACTORS_SETTING) ?? {};
+    return Boolean(disabledActors[actorId]);
 }
 
 function buildAttackCardContent(sourceToken, targetToken, validAttacks, distance) {

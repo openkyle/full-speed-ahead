@@ -7,6 +7,7 @@ const THRUSTER_COLOR_FLAG = "thrusterColor";
 const SHIP_PROFILE_FLAG = "shipProfileName";
 const SHIP_PROFILES_SETTING = "shipProfiles";
 const SCENE_THRUSTER_PROFILES_SETTING = "sceneThrusterProfiles";
+const DISABLED_TARGETING_CARD_ACTORS_SETTING = "disabledTargetingCardActors";
 const DEFAULT_MOVEMENT_SOUND_PATH = "modules/full-speed-ahead/sounds/lockon.ogg";
 const DEFAULT_THRUSTER_COLOR = "#40c7ff";
 const VEHICLE_HOVER_LOOP_MS = 5000;
@@ -272,6 +273,41 @@ class FullSpeedAheadCosmeticsConfig extends FormApplication {
     }
 }
 
+class FullSpeedAheadTargetingCardsConfig extends FormApplication {
+    static get defaultOptions() {
+        return foundry.utils.mergeObject(super.defaultOptions, {
+            id: "full-speed-ahead-targeting-cards-config",
+            title: "Full Speed Ahead: Targeting Chat Cards",
+            template: `modules/${MODULE_ID}/templates/targeting-cards-settings.hbs`,
+            width: 560,
+            closeOnSubmit: true
+        });
+    }
+
+    getData() {
+        const disabledActors = getDisabledTargetingCardActors();
+        const actors = collectTargetingCardActors().map(actor => ({
+            id: actor.id,
+            name: actor.name,
+            type: actor.type,
+            disabled: Boolean(disabledActors[actor.id])
+        }));
+
+        return {
+            actors,
+            hasActors: actors.length > 0
+        };
+    }
+
+    async _updateObject(event, formData) {
+        const disabledActors = {};
+        for (const actor of collectTargetingCardActors()) {
+            if (Boolean(formData[`disableTargetingCard_${actor.id}`])) disabledActors[actor.id] = true;
+        }
+        await game.settings.set(MODULE_ID, DISABLED_TARGETING_CARD_ACTORS_SETTING, disabledActors);
+    }
+}
+
 Hooks.once("init", () => {
     console.log(`${LOG_PREFIX} Initializing...`);
 
@@ -290,6 +326,15 @@ Hooks.once("init", () => {
         hint: "Configure optional vehicle sheet label changes.",
         icon: "fas fa-paint-brush",
         type: FullSpeedAheadCosmeticsConfig,
+        restricted: true
+    });
+
+    game.settings.registerMenu(MODULE_ID, "targetingCardsConfig", {
+        name: "Targeting Chat Card Options",
+        label: "Configure Targeting Cards",
+        hint: "Disable private Full Speed Ahead attack option cards for selected player characters.",
+        icon: "fas fa-comment-slash",
+        type: FullSpeedAheadTargetingCardsConfig,
         restricted: true
     });
 
@@ -418,6 +463,14 @@ Hooks.once("init", () => {
     registerSetting(SCENE_THRUSTER_PROFILES_SETTING, {
         name: "Scene Ship Thruster Profiles",
         hint: "Scene and ship name keyed thruster dimensions used by Full Speed Ahead.",
+        type: Object,
+        default: {},
+        config: false
+    });
+
+    registerSetting(DISABLED_TARGETING_CARD_ACTORS_SETTING, {
+        name: "Disabled Targeting Chat Card Actors",
+        hint: "Actor IDs whose players should not receive Full Speed Ahead attack option chat cards.",
         type: Object,
         default: {},
         config: false
@@ -1198,6 +1251,16 @@ function getMovementSoundOptions(tokenDocument, providedProfile = null) {
 
 function getShipProfiles() {
     return foundry.utils.deepClone(game.settings.get(MODULE_ID, SHIP_PROFILES_SETTING) ?? {});
+}
+
+function getDisabledTargetingCardActors() {
+    return foundry.utils.deepClone(game.settings.get(MODULE_ID, DISABLED_TARGETING_CARD_ACTORS_SETTING) ?? {});
+}
+
+function collectTargetingCardActors() {
+    return Array.from(game.actors ?? [])
+        .filter(actor => actor?.hasPlayerOwner && ["character", "vehicle"].includes(actor.type))
+        .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function getShipProfile(shipName) {
