@@ -29,7 +29,7 @@ export class TargetingSystem {
 
         const { weapons, spells } = getActorAttacks(actor);
 
-        ui.notifications.error("Please click on the enemy you wish to target!");
+        ui.notifications.error("Please click on the token you wish to target!");
         document.body.style.cursor = "crosshair";
 
         let floatingElements = [];
@@ -110,7 +110,7 @@ export class TargetingSystem {
             const clickIconText = new PIXI.Text("⌖", {
                 fontFamily: "Arial",
                 fontSize: 60,
-                fill: "#FF0000",
+                fill: getTargetCrosshairColor(token),
                 stroke: "#000000",
                 strokeThickness: 8,
                 dropShadow: true,
@@ -351,7 +351,11 @@ function getRangeLabel(distance, validAttacks) {
 function isPotentialTarget(token, selectedToken) {
     if (!token?.actor) return false;
     if (token.id === selectedToken.id || token.document.hidden) return false;
-    return !(token.actor.hasPlayerOwner && !token.actor.testUserPermission(game.user, "OWNER"));
+    return true;
+}
+
+function getTargetCrosshairColor(token) {
+    return token?.actor?.hasPlayerOwner ? "#00FF66" : "#FF0000";
 }
 
 function getHoveredTargetToken(sourceToken) {
