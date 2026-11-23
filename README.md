@@ -199,3 +199,24 @@ Full Speed Ahead can integrate with:
 Full Speed Ahead is a large, opinionated homebrew module in active beta.
 
 It is best for GMs who want starship encounters to be loud, visual, mechanical, and a little dangerous: shields flickering, modules breaking, crew scrambling, engines burning, scanners pinging, and the ship itself feeling like a thing worth fighting for.
+
+### Vehicle movement in Drag Ruler
+
+When Drag Ruler is installed, select **Full Speed Ahead** as its Active Speed
+Provider and enable **Movement History** to see ship routes. FSA selects its
+provider automatically when the generic/native provider was selected; it leaves
+other explicitly selected integrations alone.
+
+For ships, green covers movement before the final quarter of the ship's speed
+pool, yellow marks the remaining allowance, and red means the move exceeds it.
+Yellow is a low-movement warning, not an extra Dash allowance. The tracker and
+ruler use the same shared movement ledger, including movement awaiting GM
+confirmation. Outside combat the ruler uses the ship's speed. Character tokens
+retain normal-speed and double-speed (Dash) ranges under this provider.
+
+Ship routes use an internal ship-linked combat record, excluded from turn order,
+so Drag Ruler can save history even though crew members take the ship's initiative
+slots. The record uses the ship's existing ownership permissions. The crew-menu
+**Reset movement history** command clears both the shared movement ledger and
+Drag Ruler's route. Enable Drag Ruler's automatic measurement option if no ruler
+appears when dragging; movement history itself is available during combat.

@@ -14,7 +14,7 @@
     align-items: center;
     display: grid !important;
     gap: 7px;
-    grid-template-columns: 56px 42px minmax(0, 1fr) 54px;
+    grid-template-columns: 70px 42px minmax(0, 1fr) 54px;
     min-height: 60px;
     padding: 5px 7px;
     width: 100%;
@@ -23,7 +23,7 @@
 .full-speed-ahead-combat-row-no-crew-photo,
 #combat-tracker .full-speed-ahead-combat-row-no-crew-photo,
 .combat-tracker .full-speed-ahead-combat-row-no-crew-photo {
-    grid-template-columns: 56px minmax(0, 1fr) 54px;
+    grid-template-columns: 70px minmax(0, 1fr) 54px;
 }
 
 .full-speed-ahead-combat-vessel,
@@ -34,7 +34,7 @@
     border-right: 1px solid rgb(255 255 255 / 14%);
     display: grid;
     gap: 3px;
-    grid-template-columns: 5px minmax(0, 1fr) 5px;
+    grid-template-columns: 5px 5px minmax(0, 1fr) 7px;
     min-width: 0;
     padding-right: 4px;
 }
@@ -71,44 +71,54 @@
 #combat-tracker .full-speed-ahead-movement-fill,
 .combat-tracker .full-speed-ahead-movement-fill {
     align-self: end;
-    background: var(--fsa-movement-color, #244fbd);
-    box-shadow: 0 0 5px var(--fsa-movement-color, #244fbd);
+    background: var(--fsa-movement-color, #c4c4c4);
+    box-shadow: 0 0 5px var(--fsa-movement-color, #c4c4c4);
     height: var(--fsa-movement-percent, 100%);
     transition: background-color 180ms ease, box-shadow 180ms ease, height 180ms ease;
     width: 100%;
 }
 
-.full-speed-ahead-shield-bar,
-#combat-tracker .full-speed-ahead-shield-bar,
-.combat-tracker .full-speed-ahead-shield-bar {
-    align-items: flex-end;
+/* HP and shields retain separate, fixed portions of the same bar. */
+.full-speed-ahead-health-bar {
+    width: 5px;
+    height: 42px;
+    display: flex;
+    flex-direction: column;
     background: rgb(0 0 0 / 58%);
     border: 1px solid rgb(255 255 255 / 16%);
     border-radius: 2px;
-    box-shadow: 0 1px 2px #000 inset;
-    display: flex;
-    height: 42px;
     overflow: hidden;
-    width: 5px;
 }
-
-.full-speed-ahead-shield-fill,
-#combat-tracker .full-speed-ahead-shield-fill,
-.combat-tracker .full-speed-ahead-shield-fill {
-    align-self: end;
-    background: #238a45;
-    box-shadow: 0 0 5px #238a45;
-    height: var(--fsa-shield-percent, 0%);
-    transition: height 180ms ease;
+.full-speed-ahead-health-shields { height: 25%; }
+.full-speed-ahead-health-hp { height: 75%; }
+.full-speed-ahead-health-shields,
+.full-speed-ahead-health-hp {
+    display: flex;
+    align-items: flex-end;
+    flex-shrink: 0;
+}
+.full-speed-ahead-health-shields > div { background: #3268d2; }
+.full-speed-ahead-health-bar > div > div {
     width: 100%;
+    transition: height 180ms ease, background-color 180ms ease;
 }
+.full-speed-ahead-action-dots {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+.full-speed-ahead-action-dot {
+    display: block;
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1px solid var(--fsa-dot-color);
+    background: var(--fsa-dot-color);
+}
+.full-speed-ahead-action-dot.is-spent { background: transparent; }
 
-.full-speed-ahead-shield-bar-placeholder,
-#combat-tracker .full-speed-ahead-shield-bar-placeholder,
-.combat-tracker .full-speed-ahead-shield-bar-placeholder {
-    height: 42px;
-    width: 5px;
-}
 
 .full-speed-ahead-combat-crew-wrap,
 #combat-tracker .full-speed-ahead-combat-crew-wrap,
@@ -281,4 +291,13 @@
 .full-speed-ahead-combat-context-menu i {
     flex: 0 0 20px;
     text-align: center;
+}
+
+/* Tidy vehicle sheet: blue is reserved for shield-generator health. */
+.full-speed-ahead-sheet-shield-item.item {
+    background: linear-gradient(to right, rgb(50 104 210 / 28%) 0%, rgb(50 104 210 / 28%) var(--fsa-sheet-shield-percent), transparent var(--fsa-sheet-shield-percent), transparent 100%) !important;
+}
+.full-speed-ahead-sheet-shield-item .item-hp,
+.full-speed-ahead-sheet-shield-fill {
+    background: linear-gradient(to right, #6699ee 0%, #6699ee var(--fsa-sheet-shield-percent), transparent var(--fsa-sheet-shield-percent), transparent 100%) !important;
 }

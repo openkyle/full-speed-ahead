@@ -383,6 +383,7 @@ Hooks.once("ready", () => {
         getRecovery: getVehicleCombatRecovery
     };
     game.socket?.on?.(`module.${MODULE_ID}`, handleVehicleCombatSocket);
+    installDragRulerCrewHistoryBridge();
     registerDragRulerCombatSpeedProvider();
     syncActiveVehicleCombat();
     syncVehicleShields();
@@ -395,6 +396,11 @@ Hooks.on("canvasReady", () => {
 Hooks.on("createCombatant", combatant => {
     replaceVehicleCombatantWithCrew(combatant);
     queueVehicleCrewDuplicateCleanup(combatant?.combat);
+});
+Hooks.on("deleteCombatant", combatant => {
+    if (combatant.getFlag(MODULE_ID, CREW_COMBATANT_FLAG)) {
+        ensureVehicleHistoryAnchors(combatant.combat).catch(error => debugVehicleCombat("Could not update ship history records.", error));
+    }
 });
 Hooks.on("renderCombatTracker", (app, html) => renderVehicleCrewTracker(app, html));
 Hooks.on("deleteCombat", combat => restoreVehicleCombatOwnership(combat));
@@ -421,10 +427,15 @@ Hooks.on("updateToken", tokenDocument => {
     if (token) syncVehicleShieldForToken(token);
 });
 Hooks.on("deleteToken", tokenDocument => stopProtectionEffectForToken(tokenDocument.id));
-Hooks.on("updateActor", actor => syncVehicleShieldsForActor(actor));
+Hooks.on("updateActor", actor => {
+    syncVehicleShieldsForActor(actor);
+    if (isVehicleActor(actor)) ui.combat?.render(true);
+});
+Hooks.on("updateUser", () => ui.combat?.render(true));
 Hooks.on("createItem", item => syncVehicleShieldItemAndTracker(item));
 Hooks.on("updateItem", item => syncVehicleShieldItemAndTracker(item));
 Hooks.on("deleteItem", item => syncVehicleShieldItemAndTracker(item));
+Hooks.on("renderActorSheet", (app, html) => styleVehicleSheetHealth(app.actor, html?.[0] ?? html));
 
 function registerVehicleCombatSetting(key, data) {
     game.settings.register(MODULE_ID, key, {
@@ -576,8 +587,10 @@ async function recordVehicleCombatMovement(tokenDocument, changes, options = {},
 
     const movingUser = userId ? game.users?.get(userId) : null;
     if (!game.user?.isGM) {
+        const requestId = addPendingVehicleCombatMovementSpend(state, measuredDistance);
         game.socket?.emit?.(`module.${MODULE_ID}`, {
             type: "vehicleCombatMovementSpend",
+            requestId,
             userId: game.user.id,
             tokenUuid: tokenDocument.uuid,
             combatId: state.combat.id,
@@ -1013,40 +1026,103 @@ function registerDragRulerCombatSpeedProvider(ReadySpeedProvider = null) {
             ? dragRuler.registerSystem
             : null;
     if (!BaseProvider || !register) return;
+    installDragRulerCrewHistoryBridge();
 
     class FullSpeedAheadCombatSpeedProvider extends BaseProvider {
         get colors() {
             return [
                 { id: "fsa-combat-remaining", default: 0x2ec27e, name: "FSA Combat Movement Remaining" },
+                { id: "fsa-combat-low", default: 0xe4bd32, name: "FSA Low Movement / Character Dash" },
                 { id: "fsa-combat-spent", default: 0xd93636, name: "FSA Combat Movement Spent" }
             ];
         }
 
         getRanges(token) {
             const state = getCombatMovementStateForTokenOrActor(token);
-            // SpeedProvider#getRanges is abstract in Drag Ruler. Provide a valid
-            // unrestricted range when FSA is not managing this token's movement.
-            if (!state) {
-                return [{ range: Infinity, color: "fsa-combat-remaining" }];
-            }
-            return [
-                { range: state.remaining, color: "fsa-combat-remaining" },
-                { range: Infinity, color: "fsa-combat-spent" }
-            ];
+            return getDragRulerMovementRanges(token, state);
+        }
+
+        async onMovementHistoryUpdate() {
+            await Promise.all(Array.from(vehicleCombatMovementSpendQueues.values()));
         }
     }
 
     try {
         register.call(dragRuler, MODULE_ID, FullSpeedAheadCombatSpeedProvider);
         dragRuler.__fullSpeedAheadCombatSpeedProvider = true;
+        // Upgrade the generic provider only; preserve an explicitly selected integration.
+        if (game.user?.isGM && ["", "native"].includes(game.settings.get("drag-ruler", "speedProvider"))) {
+            game.settings.set("drag-ruler", "speedProvider", `module.${MODULE_ID}`)
+                .catch(error => debugVehicleCombat("Could not activate the Drag Ruler provider.", error));
+        }
         debugVehicleCombat("Registered Drag Ruler combat speed provider.");
     } catch (error) {
         debugVehicleCombat("Could not register Drag Ruler combat speed provider.", error);
     }
 }
 
+function getDragRulerMovementRanges(token, state) {
+    const vehicle = isVehicleActor(token?.actor);
+    const movement = token?.actor?.system?.attributes?.movement ?? {};
+    const speed = state?.speed ?? (vehicle ? getVehicleCombatSpeed(token.actor)
+        : Math.max(0, ...["walk", "fly", "swim", "climb", "burrow"].map(key => Number(movement[key]) || 0)));
+    const remaining = state?.remaining ?? speed;
+    // Drag Ruler includes its faded history in the measured total. The FSA ledger
+    // has already spent that movement, so shift the thresholds by the same history.
+    let history = 0;
+    if (state && game.settings.get("drag-ruler", "enableMovementHistory")) {
+        const measured = globalThis.dragRuler?.getMovedDistanceFromToken?.(token);
+        if (Number.isFinite(measured)) history = Math.max(0, measured);
+    }
+    if (vehicle) return [
+        { range: history + Math.max(0, remaining - speed * 0.25), color: "fsa-combat-remaining" },
+        { range: history + remaining, color: "fsa-combat-low" }
+    ];
+    return [
+        { range: speed, color: "fsa-combat-remaining" },
+        { range: speed * 2, color: "fsa-combat-low" }
+    ];
+}
+
+function isVehicleHistoryAnchor(combatant) {
+    return combatant?.getFlag(MODULE_ID, "movementHistoryAnchor") === true;
+}
+
+function installDragRulerCrewHistoryBridge() {
+    const prototype = CONFIG.Combat?.documentClass?.prototype;
+    if (!prototype?.setupTurns || prototype.setupTurns.__fsaHistoryBridge) return;
+    const original = prototype.setupTurns;
+    const wrapped = function(...args) {
+        const turns = original.apply(this, args).filter(combatant => !isVehicleHistoryAnchor(combatant));
+        this.turns = turns;
+        return turns;
+    };
+    wrapped.__fsaHistoryBridge = true;
+    prototype.setupTurns = wrapped;
+    for (const combat of game.combats ?? []) combat.setupTurns();
+}
+
+async function ensureVehicleHistoryAnchors(combat) {
+    if (!game.user?.isGM || !game.modules.get("drag-ruler")?.active || !combat) return;
+    if (game.users?.activeGM && game.users.activeGM.id !== game.user.id) return;
+    const tokenIds = new Set(Array.from(combat.combatants ?? [])
+        .map(c => c.getFlag(MODULE_ID, CREW_COMBATANT_FLAG)?.vehicleTokenId).filter(Boolean));
+    const orphaned = Array.from(combat.combatants ?? []).filter(c => isVehicleHistoryAnchor(c) && !tokenIds.has(c.tokenId));
+    if (orphaned.length) await combat.deleteEmbeddedDocuments("Combatant", orphaned.map(c => c.id));
+    const create = [];
+    for (const tokenId of tokenIds) {
+        if (combat.getCombatantByToken(tokenId)) continue;
+        const token = combat.scene?.tokens?.get(tokenId);
+        if (!isVehicleActor(token?.actor)) continue;
+        create.push({ actorId: token.actor.id, tokenId, name: token.name, hidden: true,
+            flags: { [MODULE_ID]: { movementHistoryAnchor: true } } });
+    }
+    if (create.length) await combat.createEmbeddedDocuments("Combatant", create, { fullSpeedAheadCrew: true });
+}
+
 function refreshCombatMovementDisplays() {
     ui.combat?.render(true);
+    globalThis.dragRuler?.recalculate?.();
     canvas?.tokens?.controlled?.forEach?.(token => token.renderFlags?.set?.({ refresh: true }));
     canvas?.app?.renderer?.render?.(canvas.stage);
 }
@@ -1115,7 +1191,7 @@ function getVehicleProtectionStatus(actor, tokenDocument = null) {
 
 function syncVehicleShieldItemAndTracker(item) {
     syncVehicleShieldsForItem(item);
-    if (isVehicleShieldItem(item)) ui.combat?.render(true);
+    if (isVehicleActor(item?.parent)) ui.combat?.render(true);
 }
 
 function getVehicleShieldStatus(actor) {
@@ -1543,11 +1619,12 @@ async function syncActiveVehicleCombat() {
     if (!combat) return;
     for (const combatant of Array.from(combat.combatants ?? [])) await replaceVehicleCombatantWithCrew(combatant);
     await cleanupDuplicateVehicleCrewCombatants(combat);
+    await ensureVehicleHistoryAnchors(combat);
 }
 
 async function replaceVehicleCombatantWithCrew(combatant) {
     if (!game.user.isGM || !isVehicleCombatEnabled()) return;
-    if (!combatant || combatant.getFlag(MODULE_ID, CREW_COMBATANT_FLAG)) return;
+    if (!combatant || isVehicleHistoryAnchor(combatant) || combatant.getFlag(MODULE_ID, CREW_COMBATANT_FLAG)) return;
     if (processingCombatants.has(combatant.uuid)) return;
 
     const vehicle = combatant.actor;
@@ -1627,7 +1704,11 @@ async function replaceVehicleCombatantWithCrew(combatant) {
         const created = createData.length
             ? await combatant.combat.createEmbeddedDocuments("Combatant", createData, { fullSpeedAheadCrew: true })
             : [];
-        await combatant.delete({ fullSpeedAheadReplacedVehicle: true });
+        if (game.modules.get("drag-ruler")?.active) {
+            await combatant.update({ hidden: true, [`flags.${MODULE_ID}.movementHistoryAnchor`]: true }, { fullSpeedAheadCrew: true });
+        } else {
+            await combatant.delete({ fullSpeedAheadReplacedVehicle: true });
+        }
         await cleanupDuplicateVehicleCrewCombatants(combatant.combat);
         if (warnings.length) {
             ui.notifications.info(`Full Speed Ahead created silhouette combatants for unmatched crew of ${vehicle.name}: ${warnings.join(", ")}.`);
@@ -1654,6 +1735,7 @@ function getUnflaggedActorCombatants(combat, actor, excludedCombatantId = null) 
     if (!combat || !actor) return [];
     return Array.from(combat.combatants ?? []).filter(candidate => {
         if (!candidate || candidate.id === excludedCombatantId) return false;
+        if (isVehicleHistoryAnchor(candidate)) return false;
         if (candidate.getFlag(MODULE_ID, CREW_COMBATANT_FLAG)) return false;
         return candidate.actor?.id === actor.id || candidate.actor?.uuid === actor.uuid;
     });
@@ -1907,12 +1989,14 @@ function buildVehicleCombatantRow({ combatant, data, crewName, controls, hideUnm
     const row = $(`<div class="full-speed-ahead-combat-row ${hideCrewPhoto ? "full-speed-ahead-combat-row-no-crew-photo" : ""}"></div>`);
     const movement = getCombatMovementStateForCrewData(data);
     const movementBar = buildVehicleMovementBar(movement);
-    const shieldBar = buildVehicleShieldBar(getVehicleShieldTrackerState(data));
+    const vehicle = getTrackerVehicleActor(data);
+    const healthBar = buildVehicleHealthBar(vehicle, getVehicleShieldTrackerState(data));
 
     const vessel = $(`<div class="full-speed-ahead-combat-vessel">
-        ${shieldBar}
-        <img class="full-speed-ahead-combat-ship" src="${escapeHtml(data.vehicleImg)}" alt="${escapeHtml(data.vehicleName)}">
+        ${healthBar}
         ${movementBar}
+        <img class="full-speed-ahead-combat-ship" src="${escapeHtml(data.vehicleImg)}" alt="${escapeHtml(data.vehicleName)}">
+        ${buildVehicleActionDots(vehicle, combatant, data)}
     </div>`);
     const crewPortrait = $(`<div class="full-speed-ahead-combat-crew-wrap ${hideCrewPhoto ? "full-speed-ahead-combat-crew-empty" : ""}"></div>`);
     if (!hideCrewPhoto) {
@@ -2007,6 +2091,10 @@ async function resetVehicleCrewMovementHistory(data) {
     const ledger = getCombatMovementLedger(state.combat);
     delete ledger.vehicles[state.vehicleKey];
     await state.combat.setFlag(MODULE_ID, VEHICLE_COMBAT_MOVEMENT_FLAG, ledger);
+    const historyCombatant = state.combat.getCombatantByToken(data.vehicleTokenId);
+    if (historyCombatant && globalThis.dragRuler?.resetMovementHistory) {
+        await globalThis.dragRuler.resetMovementHistory(state.combat, historyCombatant.id);
+    }
     refreshCombatMovementDisplays();
 }
 
@@ -2056,9 +2144,9 @@ function getCombatMovementStateForCrewData(data) {
 }
 
 function buildVehicleMovementBar(state) {
-    if (!state) return "";
+    if (!state) return '<div class="full-speed-ahead-movement-bar" title="Shared movement tracking unavailable"></div>';
     const percent = state.speed > 0 ? clampVehicleCombatNumber(state.remaining / state.speed, 0, 1, 0) : 0;
-    const color = percent <= 0.25 ? "#8f2525" : percent <= 0.5 ? "#a97718" : "#244fbd";
+    const color = "#c4c4c4";
     const label = `${Math.round(state.remaining * 10) / 10} / ${Math.round(state.speed * 10) / 10} ${state.unit}`;
     const recovery = `${Math.round(state.recovery * 10) / 10} ${state.unit}/turn`;
     return `<div class="full-speed-ahead-movement-bar" title="Available movement: ${escapeHtml(label)} | Recovery: ${escapeHtml(recovery)}">
@@ -2069,6 +2157,10 @@ function buildVehicleMovementBar(state) {
 function getVehicleShieldTrackerState(data) {
     const actor = resolveCrewVehicleToken(data)?.actor
         ?? (data?.vehicleActorId ? game.actors?.get(data.vehicleActorId) : null);
+    return getActorShieldTrackerState(actor);
+}
+
+function getActorShieldTrackerState(actor) {
     const shield = findVehicleShieldGenerator(actor);
     if (!shield || shield.system?.equipped !== true) return null;
     const { hp, hasHp } = getItemHpInfo(shield);
@@ -2081,12 +2173,92 @@ function getVehicleShieldTrackerState(data) {
     };
 }
 
-function buildVehicleShieldBar(state) {
-    if (!state) return `<div class="full-speed-ahead-shield-bar-placeholder" aria-hidden="true"></div>`;
-    const percent = clampVehicleCombatNumber(state.hp / state.max, 0, 1, 0);
-    const label = `${Math.round(state.hp * 10) / 10} / ${Math.round(state.max * 10) / 10} HP`;
-    return `<div class="full-speed-ahead-shield-bar" title="${escapeHtml(state.name)}: ${escapeHtml(label)}">
-        <div class="full-speed-ahead-shield-fill" style="--fsa-shield-percent: ${percent * 100}%;"></div>
+function getVehicleSheetHealthGradient(actor, shield) {
+    const hp = actor?.system?.attributes?.hp ?? {};
+    const ratio = Number(hp.max) > 0 ? clampVehicleCombatNumber(Number(hp.value) / Number(hp.max), 0, 1, 0) : 0;
+    const color = ratio <= 0.25 ? "#d93636" : ratio <= 0.5 ? "#e4bd32" : "#70c85b";
+    const shieldRatio = shield?.max > 0 ? clampVehicleCombatNumber(shield.hp / shield.max, 0, 1, 0) : 0;
+    const hpEnd = ratio * 75;
+    const shieldEnd = 75 + shieldRatio * 25;
+    return `linear-gradient(to right, ${color} 0%, ${color} ${hpEnd}%, transparent ${hpEnd}%, transparent 75%, #3268d2 75%, #3268d2 ${shieldEnd}%, transparent ${shieldEnd}%, transparent 100%)`;
+}
+
+function styleVehicleSheetHealth(actor, root) {
+    if (!isVehicleActor(actor) || !root?.querySelectorAll) return;
+    // Preserve Tidy's native inputs and handlers; only recolour the existing fills.
+    const shield = getActorShieldTrackerState(actor);
+    for (const bar of root.querySelectorAll(".portrait-hp .hp-bar")) {
+        bar.classList.add("full-speed-ahead-sheet-health");
+        bar.style.setProperty("background", getVehicleSheetHealthGradient(actor, shield), "important");
+        bar.title = `HP: ${actor.system?.attributes?.hp?.value ?? 0} / ${actor.system?.attributes?.hp?.max ?? 0} | Shields: ${shield ? `${shield.hp} / ${shield.max}` : "No equipped shield"}`;
+    }
+    for (const row of root.querySelectorAll("[data-item-id]")) {
+        for (const bar of row.querySelectorAll(".full-speed-ahead-sheet-shield-fill")) {
+            bar.classList.remove("full-speed-ahead-sheet-shield-fill");
+        }
+        const item = actor.items?.get(row.dataset.itemId);
+        const isShield = isVehicleShieldItem(item);
+        row.classList.toggle("full-speed-ahead-sheet-shield-item", isShield);
+        if (!isShield) {
+            row.style.removeProperty("--fsa-sheet-shield-percent");
+            continue;
+        }
+        const max = getItemMaxHp(item);
+        const percent = max > 0 ? clampVehicleCombatNumber(getItemHpInfo(item).hp / max, 0, 1, 0) * 100 : 0;
+        row.style.setProperty("--fsa-sheet-shield-percent", `${percent}%`);
+        for (const bar of row.querySelectorAll(".item-hp .hp-bar, .item-hp .bar, .item-hp .meter")) {
+            bar.classList.add("full-speed-ahead-sheet-shield-fill");
+        }
+    }
+}
+
+function getTrackerVehicleActor(data) {
+    return resolveCrewVehicleToken(data)?.actor
+        ?? (data?.vehicleActorId ? game.actors?.get(data.vehicleActorId) : null);
+}
+
+function buildVehicleHealthBar(actor, shield) {
+    const hp = actor?.system?.attributes?.hp ?? {};
+    const max = Math.max(0, Number(hp.max) || 0);
+    const value = clampVehicleCombatNumber(hp.value, 0, max, 0);
+    const ratio = max > 0 ? value / max : 0;
+    const color = ratio <= 0.25 ? "#d93636" : ratio <= 0.5 ? "#e4bd32" : "#238a45";
+    const shieldRatio = shield?.max > 0 ? clampVehicleCombatNumber(shield.hp / shield.max, 0, 1, 0) : 0;
+    const label = `Ship HP: ${value} / ${max} | Shields: ${shield ? `${shield.hp} / ${shield.max}` : "No equipped shield"}`;
+    // Fixed segments: depleted shields leave their reserved quarter empty.
+    return `<div class="full-speed-ahead-health-bar" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+        <div class="full-speed-ahead-health-shields"><div style="height: ${shieldRatio * 100}%"></div></div>
+        <div class="full-speed-ahead-health-hp"><div style="height: ${ratio * 100}%; background: ${color}"></div></div>
+    </div>`;
+}
+
+function getCrewActionIndicator(actor, role) {
+    const ability = PRIMARY_CREW_ROLE_ABILITIES.find(entry => entry.pattern.test(String(role ?? "")))?.ability;
+    const colors = { cha: "#42a568", con: "#d6b44c", dex: "#ce4968", wis: "#e0e0e0", tec: "#395bc9", int: "#bc43c8", str: "#dc8639" };
+    const action = ability ? Array.from(actor?.items ?? []).find(item =>
+        /\baction\b/i.test(item.name ?? "") &&
+        PRIMARY_CREW_ROLE_ABILITIES.find(entry => entry.pattern.test(item.name ?? ""))?.ability === ability
+    ) : null;
+    const uses = action?.system?.uses;
+    const tracked = uses?.value !== undefined && uses?.value !== null && uses?.value !== "" && Number.isFinite(Number(uses.value)) && Number(uses.max) > 0;
+    const spent = tracked && Number(uses.value) <= 0;
+    const status = tracked ? `${uses.value} / ${uses.max} uses${spent ? " — spent" : ""}` : "uses not tracked";
+    return { color: colors[ability] ?? "#999999", spent, label: `${role || "Crew"} action: ${status}` };
+}
+
+function buildVehicleActionDots(vehicle, combatant, data) {
+    const crew = getCrewActionIndicator(vehicle, data.role);
+    const actor = combatant.actor;
+    const users = Array.from(game.users ?? []).filter(user => !user.isGM);
+    const player = users.find(user => actor && user.character?.id === actor.id)
+        ?? users.find(user => actor?.testUserPermission?.(user, "OWNER"));
+    const rawColor = String(player?.color ?? "");
+    const playerColor = /^#[0-9a-f]{6}$/i.test(rawColor) ? rawColor : "#999999";
+    const dot = (color, label, spent = false) => `<span class="full-speed-ahead-action-dot${spent ? " is-spent" : ""}" style="--fsa-dot-color: ${color}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+    return `<div class="full-speed-ahead-action-dots">
+        ${dot(crew.color, crew.label, crew.spent)}
+        ${dot("#999999", "Ship action reminder — use your normal action economy")}
+        ${dot(playerColor, `Personal action reminder${player ? ` — ${player.name}` : " — no owning player"}`)}
     </div>`;
 }
 
