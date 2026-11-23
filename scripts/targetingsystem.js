@@ -42,6 +42,7 @@ export class TargetingSystem {
         document.body.style.cursor = "crosshair";
 
         let floatingElements = [];
+        const targetOverlays = [];
         let cleanedUp = false;
         let longRangeTemplate;
         let shortRangeTemplate;
@@ -133,6 +134,7 @@ export class TargetingSystem {
             clickIconText.buttonMode = true;
             canvas.stage.addChild(clickIconText);
             floatingElements.push(clickIconText);
+            targetOverlays.push({ token, elements: [transparentMat, targetNameText, floatingText, floatingDistanceText, clickIconText] });
 
             const selectTarget = async event => {
                 stopFoundryEvent(event);
@@ -156,6 +158,19 @@ export class TargetingSystem {
             cleanupTargetingDisplay();
         };
 
+        // These overlays live on the stage, outside Foundry's token visibility layer.
+        // Keep every label and hit area in sync when movement, doors, or vision change.
+        const refreshTargetVisibility = () => {
+            for (const { token, elements } of targetOverlays) {
+                const visible = isTokenVisibleToCurrentUser(token);
+                for (const element of elements) element.visible = visible;
+            }
+        };
+        const visibilityHook = Hooks.on("sightRefresh", refreshTargetVisibility);
+        const tokenRefreshHook = Hooks.on("refreshToken", refreshTargetVisibility);
+        const teardownHook = Hooks.on("canvasTearDown", cleanupTargetingDisplay);
+        refreshTargetVisibility();
+
         document.addEventListener("keydown", cancelTargetingOnEscape, true);
         canvas.stage?.on("pointerdown", cancelTargetingOnBoardClick);
 
@@ -167,6 +182,9 @@ export class TargetingSystem {
         function cleanupTargetingDisplay() {
             if (cleanedUp) return;
             cleanedUp = true;
+            Hooks.off("sightRefresh", visibilityHook);
+            Hooks.off("refreshToken", tokenRefreshHook);
+            Hooks.off("canvasTearDown", teardownHook);
 
             floatingElements.forEach(element => {
                 if (canvas.stage.children.includes(element)) canvas.stage.removeChild(element);
@@ -447,13 +465,14 @@ function isTokenVisibleToCurrentUser(token) {
     if (token.visible === false || token.isVisible === false) return false;
 
     const visibility = canvas?.effects?.visibility ?? canvas?.visibility;
-    if (typeof visibility?.testVisibility !== "function") return token.visible !== false;
+    if (typeof visibility?.testVisibility !== "function") return false;
 
     try {
         const tolerance = Math.max(2, Math.min(Number(token.w || 0), Number(token.h || 0)) / 4);
         return Boolean(visibility.testVisibility(token.center, { tolerance, object: token }));
     } catch (_error) {
-        return token.visible !== false;
+        // Never expose a token's position or name when player visibility is unknown.
+        return false;
     }
 }
 
